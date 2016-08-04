@@ -1,0 +1,196 @@
+# -*- coding: utf-8 -*- 
+"""
+Spyder Editor
+
+This is a temporary script file.
+"""
+import numpy as np
+import math
+import matplotlib.pyplot as plt
+import operator
+import csv
+import pickle
+import sometools.FileToolkit
+
+def check_results(label,cluster):
+    clusterdic={}
+    for i in range(len(label)):
+        clulabel=str(int(cluster[i][0]))
+        if clulabel in clusterdic:
+            if label[i] in clusterdic[clulabel]:
+                clusterdic[clulabel][label[i]]=clusterdic[clulabel][label[i]]+1
+            else:
+                clusterdic[clulabel][label[i]]=1
+        else:
+            clusterdic[clulabel]={}
+            if label[i] in clusterdic[clulabel]:
+                clusterdic[clulabel][label[i]]=clusterdic[clulabel][label[i]]+1
+            else:
+                clusterdic[clulabel][label[i]]=1
+    return clusterdic
+
+#取label
+def Take_label(labelpath):
+    li=[]
+    label=[]
+    with open(labelpath,'r') as f:
+        for line in f.readlines():
+            line=line.split()
+            li.append(line)
+    for line in li[1:-1]:
+        label.append(line[3])
+    return label
+
+#决策图中核心点的选取（包括离群点的度量）
+#默认前提：核心点与离群点相对其他普通点距离更大，因此在对距离排序之后，依次是核心点，离群点。默认离群点是
+#邻居数量比较少的点。离群点标注之后，通过下一个距离最大的点一定是比离群点邻居数量更多这一性质来判断标注结束
+#返回标注的list 【类别，原始index】
+def Get_Center_and_Outlier(localdensity,dishigher):
+    enlist=[]
+    relist=[]
+    for index,value in enumerate(dishigher):
+        enlist.append([index,value])
+    enlist.sort(key=operator.itemgetter(1),reverse=True)
+    record=localdensity[enlist[0][0]]
+    i=1
+    for element in  enlist:
+        if element[1]>800:
+            if localdensity[element[0]]<200:
+                relist.append([-1,element[0]])
+            elif localdensity[element[0]]>200 and element[1]>800:
+                relist.append([i,element[0]])
+                i=i+1
+        record=localdensity[element[0]]
+    return relist
+
+#把算出来的数据提取出来，供下一步做决策图与聚类
+def save2entry(filename):
+
+    entry={}
+    entry['dataset']=dateset
+    entry['dismatrix']=dismatrix
+    entry['localdensity']=localdensity
+    entry['dishigher']=dishigher
+    with open(filename, 'wb') as f:    
+        pickle.dump(entry, f)
+    
+#提取csv数据并返回dateset(array类型)
+def dateLoader(filename):
+    with open(filename,'r') as f:
+        chiplist=[]
+        reader = csv.reader(f)
+        for row in reader:
+            chiplist.append(row)
+    chiplist=(np.array(chiplist)).astype('float')
+    return chiplist
+    
+#计算两点距离
+def getdistance(X1,X2):
+    out=X1-X2
+    out=pow(out,2)
+    return math.sqrt(sum(out))
+
+#计算距离矩阵    （相似度如何？）
+def getdismatrix(dateset):
+    instance_nums=len(dateset)
+    dismatrix = np.zeros((instance_nums,instance_nums)) 
+    for i in range(instance_nums):
+        for j in range(i,instance_nums):
+            dismatrix[i][j]=getdistance(dateset[i],dateset[j])
+    dismatrix=dismatrix+dismatrix.T        
+    return np.matrix(dismatrix)
+    
+#计算本地密度
+def getlocaldensity(dismatrix,dc):
+    localdensity=np.zeros(dismatrix.shape[0])
+    for i in range(dismatrix.shape[0]):
+        num_sum=0
+        disvector=dismatrix[i,:]
+        for j in range(dismatrix.shape[0]):
+            if i!=j:
+                num_sum+=math.exp(-(disvector[0,j]/dc)*(disvector[0,j]/dc));  
+        localdensity[i]=num_sum
+    return localdensity
+
+#计算到更高密度点的距离，若是本身已经是最高密度则计算其到任意点的最大距离
+def getdisforhigherdensity(localdensity,dismatrix):
+    dishigher=np.zeros(dismatrix.shape[0])
+    for i in range(len(localdensity)):
+        mindis=max(np.array(dismatrix[i,:])[0])
+        for j in range(len(localdensity)):
+            if localdensity[j]>localdensity[i]:
+                if dismatrix[i,j]<mindis and i!=j:
+                    mindis=dismatrix[i,j]
+        dishigher[i]=mindis
+    return dishigher
+
+#选出的聚类核心的格式是（类别，本地密度，dishigher,（坐标））。然后将localdensity,dishigher按降序进行排列）
+def cluster(dateset,localdensity,dishigher,centers):
+    catelist=np.zeros(len(localdensity))
+    instancelist=[]      
+    for i in range(len(localdensity)):
+        a=[catelist[i],localdensity[i],dishigher[i],dateset[i],i]
+        instancelist.append(a)
+    for k in range(len(centers)):
+        cate=centers[k][0]
+        index=centers[k][1]
+        instancelist[index][0]=cate
+    instancelist.sort(key=operator.itemgetter(1,2),reverse=True)
+    for i in range(len(instancelist)):
+        minidis=instancelist[0][2]
+        minidex=0
+        for j in range(i):
+            if(instancelist[i][0]==0):
+                if(getdistance(instancelist[i][3],instancelist[j][3])<minidis):
+                    minidis=getdistance(instancelist[i][3],instancelist[j][3])
+                    minidex=j
+                    instancelist[i][0]=instancelist[minidex][0]
+    instancelist.sort(key=operator.itemgetter(4))
+    return instancelist
+
+#实现从csv数据到决策图数据
+def From_csv_To_entry(path,filename,entrypath):
+    chiplist=dateLoader(path+'\\'+filename+'.csv')
+    dateset = chiplist
+    dismatrix=getdismatrix(dateset)
+    meandis=np.mean(sum(dismatrix))/len(dateset)
+    localdensity=getlocaldensity(dismatrix,meandis)
+    dishigher=getdisforhigherdensity(localdensity,dismatrix)   
+    save2entry(entrypath+'\\'+filename+'.pickle')
+    
+#实现从rawentrydata到clustring_reslut
+def Get_Cluster_result(entrypath,clusterpath):
+    with open(entrypath,'rb') as f:
+        entry=pickle.load(f)
+    centerlist=Get_Center_and_Outlier(entry['localdensity'],entry['dishigher'])
+    cluster_result=cluster(entry['dataset'],entry['localdensity'],entry['dishigher'],centerlist)
+    with open(clusterpath,'wb') as f:
+        pickle.dump(cluster_result, f)
+
+#实验函数
+def lalala(num):
+    with open('F:\CB\Learn\8-2\entrydata\\'+str(num)+'.pickle','rb') as f:
+        entry=pickle.load(f)    
+    relist=Get_Center_and_Outlier(entry['localdensity'],entry['dishigher'])
+    clusterlist=cluster(entry['dataset'],entry['localdensity'],entry['dishigher'],relist)
+    label=Take_label('F:\CB\Learn\8-2\data_MIT_BIH\\'+str(num)+'r.txt')
+    check=check_results(label,clusterlist)
+    plt.scatter(entry['localdensity'],entry['dishigher'])
+    print(check)
+    
+    
+    
+if __name__=='__main__':
+    
+    
+    path=r'F:\CB\Learn\8-2\newdata'
+    entrypath=r'F:\CB\Learn\8-2\entrydata'
+    csvlist=sometools.FileToolkit.Get_Unique_Filename_Without_Extend(path)
+    for filename in csvlist:
+        chiplist=dateLoader(path+'\\'+filename+'.csv')
+        dateset = chiplist
+        dismatrix=getdismatrix(dateset)
+        meandis=np.mean(sum(dismatrix))/len(dateset)
+        localdensity=getlocaldensity(dismatrix,meandis)
+        dishigher=getdisforhigherdensity(localdensity,dismatrix)   
+        save2entry(entrypath+'\\'+filename+'.pickle')
